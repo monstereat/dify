@@ -1,0 +1,20 @@
+name: develop-me enterprise agent gateway
+on:
+  push:
+    branches: [develop-me]
+    paths:
+      - 'examples/enterprise-agent-gateway/**'
+      - '.github/workflows/develop-me-agent-gateway.yml'
+  workflow_dispatch:
+jobs:
+  gateway-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Run gateway integration tests (mock Dify)
+        working-directory: examples/enterprise-agent-gateway
+        run: npm test
