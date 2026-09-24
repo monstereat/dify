@@ -8,13 +8,17 @@ afterEach(async () => {
   await Promise.all(servers.splice(0).map(s => new Promise(resolve => s.close(resolve))));
 });
 
-async function request(handler, body, token = 'test-secret') {
+async function request(handler, body, token = 'test-secret', requestId = 'req-test-1') {
   const server = http.createServer(handler);
   servers.push(server);
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   return fetch(`http://127.0.0.1:${server.address().port}/api/enterprise/workflows/run`, {
     method: 'POST',
-    headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+    headers: {
+      authorization: `Bearer ${token}`,
+      'content-type': 'application/json',
+      'x-request-id': requestId,
+    },
     body: JSON.stringify(body),
   });
 }
@@ -58,13 +62,17 @@ test('derives upstream identity server-side and forwards only authorized documen
   });
   const result = await request(handler, { ...valid, documentIds: ['doc1', 'doc1'], user: 'admin' });
   assert.equal(result.status, 200);
-  assert.equal((await result.json()).outputs.answer, 'ok');
+  const responseBody = await result.json();
+  assert.equal(responseBody.outputs.answer, 'ok');
+  assert.equal(responseBody.requestId, 'req-test-1');
+  assert.equal(result.headers.get('x-request-id'), 'req-test-1');
   assert.equal(observed.url, 'http://dify.local/v1/workflows/run');
   const payload = JSON.parse(observed.init.body);
   assert.equal(payload.user, 'user-42');
   assert.deepEqual(payload.inputs.document_ids, ['doc1']);
   assert.equal(payload.inputs.user, undefined);
   assert.equal(observed.init.headers.authorization, 'Bearer upstream-test-key');
+  assert.equal(observed.init.headers['x-request-id'], 'req-test-1');
 });
 
 test('does not expose upstream error bodies or secrets', async () => {
@@ -75,4 +83,41 @@ test('does not expose upstream error bodies or secrets', async () => {
   const response = await request(handler, valid);
   assert.equal(response.status, 502);
   assert.equal(JSON.stringify(await response.json()).includes(config.difyApiKey), false);
+});
+
+test('writes sanitized audit events for accepted workflow execution', async () => {
+  const audit = [];
+  const handler = createHandler({
+    ...config,
+    auditSink: event => audit.push(event),
+    fetchImpl: async () => ({
+      ok: true,
+      json: async () => ({
+        workflow_run_id: 'run-audit',
+        data: { status: 'succeeded', outputs: { answer: 'ok' } },
+      }),
+    }),
+  });
+
+  const response = await request(handler, valid);
+  assert.equal(response.status, 200);
+  assert.deepEqual(audit.map(event => event.outcome), ['started', 'succeeded']);
+  assert.equal(audit[0].actorId, 'user-42');
+  assert.equal(audit[0].projectId, 'p1');
+  assert.equal(audit[0].documentCount, 1);
+  assert.equal(audit[1].workflowRunId, 'run-audit');
+  assert.equal(JSON.stringify(audit).includes(config.difyApiKey), false);
+  assert.equal(JSON.stringify(audit).includes(valid.question), false);
+});
+
+test('audits authorization denials without logging document contents', async () => {
+  const audit = [];
+  const handler = createHandler({ ...config, auditSink: event => audit.push(event) });
+  const response = await request(handler, { ...valid, documentIds: ['doc3'] });
+  assert.equal(response.status, 403);
+  assert.equal(audit.length, 1);
+  assert.equal(audit[0].outcome, 'denied');
+  assert.equal(audit[0].reason, 'authorization');
+  assert.equal(audit[0].projectId, 'p1');
+  assert.equal(JSON.stringify(audit).includes('doc3'), false);
 });
