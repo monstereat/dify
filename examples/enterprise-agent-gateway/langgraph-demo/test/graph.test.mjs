@@ -67,3 +67,56 @@ test('Dify role adapters send only server-owned credentials and validated inputs
   assert.equal(JSON.parse(requests[0].body).user, 'verified-user');
   assert.equal(JSON.parse(requests[0].body).inputs.role, 'product');
 });
+
+test('failed independent tests stop before approval and never deliver', async () => {
+  let deliveries = 0;
+  const graph = createResearchDevelopmentGraph({
+    productAgent: async () => 'Plan',
+    developerAgent: async () => 'Diff',
+    testAgent: async () => ({ passed: false, report: 'Unit tests failed (2 failures)' }),
+    deliver: async () => { deliveries++; return 'unexpected delivery'; },
+  });
+  const threadId = 'req-failed-tests';
+  const finished = await begin(graph, {
+    projectId: 'sales-platform', requirement: 'Add refund validation', threadId,
+  });
+  const state = await graph.getState({ configurable: { thread_id: threadId } });
+  assert.equal(finished.verificationPassed, false);
+  assert.ok(finished.events.includes('tester.failed'));
+  assert.equal(state.next.length, 0, 'a failed test must not create a pending approval');
+  assert.equal(deliveries, 0);
+  await assert.rejects(review(graph, { threadId, approved: true }), /not awaiting approval/);
+});
+
+test('successful structured test output can reach the approval boundary', async () => {
+  const graph = createResearchDevelopmentGraph({
+    productAgent: async () => 'Plan',
+    developerAgent: async () => 'Diff',
+    testAgent: async () => ({ passed: true, report: '3 suites passed' }),
+    deliver: async () => 'PR #17',
+  });
+  const threadId = 'req-verified';
+  await begin(graph, {
+    projectId: 'sales-platform', requirement: 'Implement revenue API', threadId,
+  });
+  const state = await graph.getState({ configurable: { thread_id: threadId } });
+  assert.equal(state.values.verificationPassed, true);
+  assert.ok(state.next.includes('approval'));
+  assert.equal((await review(graph, { threadId, approved: true })).delivery, 'PR #17');
+});
+
+test('malformed structured test status fails closed', async () => {
+  const graph = createResearchDevelopmentGraph({
+    productAgent: async () => 'Plan',
+    developerAgent: async () => 'Diff',
+    testAgent: async () => ({ report: 'looks good' }),
+    deliver: async () => 'never',
+  });
+  await assert.rejects(
+    begin(graph, {
+      projectId: 'sales-platform', requirement: 'Implement audit API',
+      threadId: 'req-malformed-test',
+    }),
+    /passed: boolean/,
+  );
+});
