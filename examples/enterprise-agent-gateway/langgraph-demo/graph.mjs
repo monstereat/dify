@@ -8,6 +8,7 @@ const State = Annotation.Root({
   plan: Annotation(),
   implementation: Annotation(),
   verification: Annotation(),
+  verificationPassed: Annotation(),
   approved: Annotation(),
   delivery: Annotation(),
   events: Annotation({ default: () => [], reducer: (a, b) => a.concat(b) }),
@@ -51,17 +52,32 @@ export function createResearchDevelopmentGraph({
       }), 'developer'),
       events: ['developer.completed'],
     }))
-    .addNode('tester', async (state) => ({
-      verification: requiredText(await testAgent({
+    .addNode('tester', async (state) => {
+      const result = await testAgent({
         projectId: state.projectId,
         requirement: state.requirement,
         plan: state.plan,
         implementation: state.implementation,
-      }), 'tester'),
-      events: ['tester.completed'],
-    }))
+      });
+      // A structured, independently run test adapter can block approval and
+      // delivery. Legacy text reports are retained for the opt-in demo only.
+      const structured = result !== null && typeof result === 'object';
+      const verification = requiredText(
+        structured ? result.report : result, 'tester',
+      );
+      if (structured && typeof result.passed !== 'boolean') {
+        throw new TypeError('Structured test results require passed: boolean');
+      }
+      return {
+        verification,
+        verificationPassed: structured ? result.passed : true,
+        events: [structured && !result.passed
+          ? 'tester.failed' : 'tester.completed'],
+      };
+    })
     .addNode('approval', (state) => {
-      // The graph suspends HERE. The delivery adapter cannot run before resume.
+      // The graph suspends HERE after test success. A failed structured test
+      // result exits the graph before this node, and cannot trigger delivery.
       const review = interrupt({
         kind: 'development-delivery-approval',
         projectId: state.projectId,
@@ -87,7 +103,7 @@ export function createResearchDevelopmentGraph({
     .addEdge(START, 'product')
     .addEdge('product', 'developer')
     .addEdge('developer', 'tester')
-    .addEdge('tester', 'approval')
+    .addConditionalEdges('tester', (s) => s.verificationPassed ? 'approval' : END, ['approval', END])
     .addConditionalEdges('approval', (s) => s.approved ? 'deliver' : END, ['deliver', END])
     .addEdge('deliver', END)
     .compile({ checkpointer });
