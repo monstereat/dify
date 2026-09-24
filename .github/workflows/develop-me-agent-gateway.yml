@@ -18,3 +18,17 @@ jobs:
       - name: Run gateway integration tests (mock Dify)
         working-directory: examples/enterprise-agent-gateway
         run: npm test
+  langgraph-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install LangGraph demo dependencies
+        working-directory: examples/enterprise-agent-gateway/langgraph-demo
+        run: npm install --no-audit --no-fund
+      - name: Test approval and resume
+        working-directory: examples/enterprise-agent-gateway/langgraph-demo
+        run: npm test
