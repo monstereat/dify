@@ -86,3 +86,10 @@ npm test
 ```
 
 **注意：** 本文 [x] 表示相关代码已提交，不代表现场服务部署或 CI 通过。LangGraph.js、NestJS、生产权限和真实检索需要后续集成。维护本文件时只在相应功能通过验收后更新状态；简历只写实际验证的个人贡献。
+
+## 2026-09-24 增量：测试结果门禁（已提交并通过专用 CI）
+
+- [x] LangGraph `tester` 节点支持结构化结果 `{ passed: boolean, report: string }`；`passed: false` 时直接结束，不再进入审批，更不会调用交付工具。
+- [x] 缺失 `passed` 的结构化结果会拒绝执行；增加失败、成功和格式错误三类回归测试。
+- [x] GitHub Actions `develop-me enterprise agent gateway` 在相关代码提交后显示成功。
+- [ ] **生产接入仍待完成：** 禁止依赖旧版纯文本测试报告作为通过依据；必须由可信 CI/测试适配器提供 `passed`，且交付边界要独立复核授权和审批。
